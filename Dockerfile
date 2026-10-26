@@ -1,29 +1,19 @@
 FROM node:22-alpine AS build
-
 WORKDIR /app
-
-# `npm ci` installs exactly what package-lock.json pins, so image builds are
-# reproducible — `npm install` was free to resolve newer versions.
+# puppeteer (devDependency) would download Chrome from storage.googleapis.com: blocked
+# in the AiX sandbox. The runtime stage uses Alpine's chromium instead.
+ENV PUPPETEER_SKIP_DOWNLOAD=true NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
 RUN npm ci
-
 COPY . .
 RUN npm run build
-
-# Drop dev-only packages before they are copied into the runtime image. The
-# `puppeteer` devDependency bundles its own Chromium (hundreds of MB) that
-# production never uses — production runs puppeteer-core with
-# @sparticuz/chromium.
-RUN npm prune --omit=dev
-
+# NOTE: no `npm prune --omit=dev` - the self-hosted PDF path imports the full
+# `puppeteer` package (a devDependency) at runtime.
 
 FROM node:22-alpine AS production
-
 WORKDIR /app
-
-ENV NODE_ENV=production
-
-# Chromium needs these at runtime; the Alpine base does not ship them.
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0 \
+    PUPPETEER_SKIP_DOWNLOAD=true PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -31,16 +21,12 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont
-
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
-
 COPY --from=build --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=build --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=build --chown=nextjs:nodejs /app/package.json ./package.json
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
-
 USER nextjs
-
 EXPOSE 3000
 CMD ["npm", "start"]
